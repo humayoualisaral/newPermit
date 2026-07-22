@@ -1,7 +1,6 @@
 "use client";
 
 import { useInjectedWallets } from "../lib/useInjectedWallets";
-import { getWalletConnectProvider } from "../lib/walletconnect";
 import { getMagicProvider } from "../lib/magic";
 
 export default function WalletSelectModal({ onSelect, onClose }) {
@@ -16,21 +15,12 @@ export default function WalletSelectModal({ onSelect, onClose }) {
     }
   };
 
-  const connectWalletConnect = async () => {
-    try {
-      const wcProvider = await getWalletConnectProvider();
-      await wcProvider.connect(); 
-      onSelect(wcProvider);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
   const connectMagic = async () => {
     try {
       const magic = getMagicProvider();
       
-      // Opens the Magic iframe popup for Email/Social login
+      // Opens the Magic UI (which will only show wallets like Trust Wallet 
+      // based on your Magic Dashboard settings)
       await magic.wallet.connectWithUI(); 
       
       // Pass the magic RPC provider to your deposit flow
@@ -52,11 +42,11 @@ export default function WalletSelectModal({ onSelect, onClose }) {
 
         {injectedWallets.length === 0 && (
           <p style={{ fontSize: 13, color: "#666" }}>
-            No browser extension wallets detected. Use WalletConnect or Email Login below.
+            No browser extension wallets detected. Use the button below to connect via Trust Wallet or mobile.
           </p>
         )}
 
-        {/* 1. Browser Extensions */}
+        {/* 1. Browser Extensions (MetaMask, Trust Wallet Extension, etc.) */}
         {injectedWallets.map(({ info, provider }) => (
           <button key={info.uuid} onClick={() => connectInjected(provider)} style={walletRowStyle}>
             {info.icon && <img src={info.icon} alt="" width={20} height={20} />}
@@ -64,14 +54,9 @@ export default function WalletSelectModal({ onSelect, onClose }) {
           </button>
         ))}
 
-        {/* 2. Wallet Connect */}
-        <button onClick={connectWalletConnect} style={walletRowStyle}>
-          WalletConnect (Trust Wallet, etc.)
-        </button>
-
-        {/* 3. Magic SDK (Email/Social) */}
+        {/* 2. Magic SDK (Mobile Wallets) */}
         <button onClick={connectMagic} style={walletRowStyle}>
-          Email / Social Login (Magic)
+          Connect Mobile Wallet (via Magic)
         </button>
       </div>
     </div>
