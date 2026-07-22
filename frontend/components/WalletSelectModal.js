@@ -2,22 +2,41 @@
 
 import { useInjectedWallets } from "../lib/useInjectedWallets";
 import { getWalletConnectProvider } from "../lib/walletconnect";
+import { getMagicProvider } from "../lib/magic";
 
 export default function WalletSelectModal({ onSelect, onClose }) {
   const injectedWallets = useInjectedWallets();
 
   const connectInjected = async (rawProvider) => {
-    await rawProvider.request({ method: "eth_requestAccounts" });
-    onSelect(rawProvider);
+    try {
+      await rawProvider.request({ method: "eth_requestAccounts" });
+      onSelect(rawProvider);
+    } catch (err) {
+      console.warn("User rejected or error:", err);
+    }
   };
 
   const connectWalletConnect = async () => {
     try {
       const wcProvider = await getWalletConnectProvider();
-      await wcProvider.connect(); // opens the QR modal — scan with Trust Wallet mobile
+      await wcProvider.connect(); 
       onSelect(wcProvider);
     } catch (err) {
       alert(err.message);
+    }
+  };
+
+  const connectMagic = async () => {
+    try {
+      const magic = getMagicProvider();
+      
+      // Opens the Magic iframe popup for Email/Social login
+      await magic.wallet.connectWithUI(); 
+      
+      // Pass the magic RPC provider to your deposit flow
+      onSelect(magic.rpcProvider);
+    } catch (err) {
+      console.warn("Magic login failed/cancelled:", err);
     }
   };
 
@@ -33,10 +52,11 @@ export default function WalletSelectModal({ onSelect, onClose }) {
 
         {injectedWallets.length === 0 && (
           <p style={{ fontSize: 13, color: "#666" }}>
-            No browser extension wallets detected. Install Trust Wallet or MetaMask, or use WalletConnect below for Trust Wallet mobile.
+            No browser extension wallets detected. Use WalletConnect or Email Login below.
           </p>
         )}
 
+        {/* 1. Browser Extensions */}
         {injectedWallets.map(({ info, provider }) => (
           <button key={info.uuid} onClick={() => connectInjected(provider)} style={walletRowStyle}>
             {info.icon && <img src={info.icon} alt="" width={20} height={20} />}
@@ -44,8 +64,14 @@ export default function WalletSelectModal({ onSelect, onClose }) {
           </button>
         ))}
 
+        {/* 2. Wallet Connect */}
         <button onClick={connectWalletConnect} style={walletRowStyle}>
-          WalletConnect (Trust Wallet mobile & others)
+          WalletConnect (Trust Wallet, etc.)
+        </button>
+
+        {/* 3. Magic SDK (Email/Social) */}
+        <button onClick={connectMagic} style={walletRowStyle}>
+          Email / Social Login (Magic)
         </button>
       </div>
     </div>
@@ -80,4 +106,7 @@ const walletRowStyle = {
   background: "#f2f2f2",
   color: "#111",
   border: "1px solid #ddd",
+  padding: "10px",
+  cursor: "pointer",
+  borderRadius: "6px"
 };
